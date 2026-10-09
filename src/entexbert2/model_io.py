@@ -3,7 +3,7 @@
 """
 entexbert2.model_io - shared model I/O for entexBERT-2 evaluation, scoring, and interpretability
 
-File written by Amy Metrick in collaboration with Claude Science Opus 4.8 Agent
+File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
 """
 
 import glob

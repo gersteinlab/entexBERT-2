@@ -5,7 +5,7 @@ entexbert2.model — the 2-stage ASB model
 
   * task="regression"  (Stage-1 binding trunk):  mu = g(f(seq))
         One window -> one binding score,
-        MSE on the (log1p fold-change) binding label (precision-weighted if depth columb provided),
+        MSE on the (log1p fold-change) binding label (precision-weighted if depth column provided),
         Single-track (scalar) or multi-track (one score per tissue) via num_labels
 
   * task="classification"  (Stage-2 ASB head, symmetric contrast):
@@ -14,7 +14,7 @@ entexbert2.model — the 2-stage ASB model
         Symmetric by construction,
         Loss = Precision-weighted BCE
 
-File written by Amy Metrick in collaboration with Claude Science Opus 4.8 Agent
+File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
 """
 from typing import Optional
 
@@ -159,7 +159,7 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
             # logit = a * s + b
             # intialize so a = 1, b = 0 (identity mapping)
             # a computed via softplus(a_raw) at forward: log(1 + e^(a_raw)) to enforce monotonicity, smoothness
-            # --> a_raw = ln(e^(−1)) = 0.5413, so that softplus(a_raw) = 1 at initialization
+            # --> a_raw = ln(e − 1) = 0.5413, so that softplus(a_raw) = 1 at initialization
             self.dist_a = torch.nn.Parameter(torch.tensor(0.5413))
             self.dist_b = torch.nn.Parameter(torch.tensor(0.0))
             self.main_head = None
