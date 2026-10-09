@@ -10,7 +10,6 @@ File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
 """
 
 import os
-import json
 import numpy as np
 import pandas as pd
 from pyfaidx import Fasta
@@ -18,12 +17,12 @@ from pyfaidx import Fasta
 _BASECOL = {"A": "cA", "C": "cC", "G": "cG", "T": "cT"}
 
 def load_hetsnv(path, assay, min_total_reads):
-    usecols = ["chr", "ref_start", "ref_end", "ref_allele", "hap1_allele", "hap2_allele",
-               "donor", "tissue", "assay", "cA", "cC", "cG", "cT",
-               "ref_allele_ratio", "p_betabinom", "imbalance_significance"]
     """
     Load data from (pre-downloaded) EN-TEx heterozygous SNV file (http://entex.encodeproject.org/main.html/hetSNVs_pooled_AS.tsv)
     """
+    usecols = ["chr", "ref_start", "ref_end", "ref_allele", "hap1_allele", "hap2_allele",
+               "donor", "tissue", "assay", "cA", "cC", "cG", "cT",
+               "ref_allele_ratio", "p_betabinom", "imbalance_significance"]
     df = pd.read_csv(path, sep="\t", usecols=lambda c: c in usecols)
     if assay and assay.upper() != "ALL":
         df = df[df["assay"].astype(str).str.contains(assay, case=False, na=False)]
@@ -103,7 +102,7 @@ def build_windows(df, ref_fasta, left_bp, right_bp,
     return seqs1, seqs2, np.array(keep, dtype=bool)
 
 def score_pairs(df, seqs1, seqs2, keep, checkpoint_dir, batch_size=64, device="cuda", overrides=None, dump_embeddings=False):
-    from entexbert2.model_io import run_inference
+    from entexbert2.model_io import run_inference # IMPORTANT so torch is not imported here unecessarily!
     df = df.loc[keep].reset_index(drop=True)
     pairs = [[s1, s2] for s1, s2 in zip(np.asarray(seqs1)[keep], np.asarray(seqs2)[keep])]
     print(f"[score] running twin inference on {len(pairs)} variants "
@@ -123,7 +122,7 @@ def score_pairs(df, seqs1, seqs2, keep, checkpoint_dir, batch_size=64, device="c
 def pool_hetsnv_tissues(df):
     """Pool hetSNV rows per locus across all tissues to match the tissue-pooled training label"""
     keys = [k for k in ["chr", "ref_start", "ref_end", "ref_allele", "hap1_allele",
-                        "hap2_allele", "donor", "assay"] if k in df.columns]
+                        "hap2_allele", "donor", "assay", "tissue"] if k in df.columns]
     g = df.groupby(keys, sort=False).agg(
         hap1_count=("hap1_count", "sum"), hap2_count=("hap2_count", "sum"),
         imbalance_significance=("imbalance_significance", "max"), # max over all tissues at this locus (i.e. 1 if imbalanced in ANY tissue)
