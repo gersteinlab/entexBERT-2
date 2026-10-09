@@ -14,7 +14,7 @@ entexbert2.model — the 2-stage ASB model
         Symmetric by construction,
         Loss = Precision-weighted BCE
 
-File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
+File written by Amy Metrick in collaboration with Anthropic's Claude Science Opus 5 Agent
 """
 from typing import Optional
 

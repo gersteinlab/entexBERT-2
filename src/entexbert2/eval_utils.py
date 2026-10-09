@@ -6,7 +6,7 @@
 - window construction
 - inference setup for twin sequences input (both haplotypes for stage 2)
 
-File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
+File written by Amy Metrick in collaboration with Anthropic's Claude Science Opus 5 Agent
 """
 
 import os
