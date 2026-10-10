@@ -112,19 +112,17 @@ class PartitionSpec:
     # --- pure genomic-bin 3-way split (used when enabled=True but no chromosome is held out) ---
     bin_test_frac: float = 0.0                                      # fraction of bins -> test (e.g. 0.10)
     bin_dev_frac: float = 0.0                                       # fraction of bins -> dev (e.g. 0.10); train = 1 - test - dev
-    # --- boundary-leakage control: drop loci whose [pos-boundary_bp, pos+boundary_bp] window straddles a bin edge
+    # --- boundary-leakage control: drop loci whose [pos-boundary_bp, pos+boundary_bp] window straddles a bin edge ---
     exclude_boundary: bool = False
     boundary_bp: int = 0                                            # half-window; set to max(left_bp, right_bp) + jitter_max_bp
 
     def __post_init__(self):
         if self.exclude_boundary and self.boundary_bp <= 0:
-            raise ValueError("exclude_boundary=True requires boundary_bp > 0 "
-                             "(set it to max(left_bp, right_bp) of your WindowSpec); "
-                             "boundary_bp=0 would silently disable the exclusion.")
+            raise ValueError("exclude_boundary=True requires boundary_bp > 0 -- (set it to max(left_bp, right_bp) of your WindowSpec)")
         if self.enabled and not self.fold_assignment and self.bin_test_frac <= 0:
             raise ValueError(
                 "PartitionSpec(enabled=True) would produce no test set: supply fold_assignment "
-                "(whole-chromosome hold-out) or bin_test_frac > 0 (pure genomic-bin 3-way split).")
+                "(whole-chromosome hold-out) or bin_test_frac > 0 (pure genomic-bin 3-way split)")
 
 def genomic_bin_id(chrom: str, pos: int, bin_size: int) -> str:
     """
@@ -144,9 +142,7 @@ def assign_split_column(df: pd.DataFrame, spec: "PartitionSpec") -> np.ndarray:
     same locus lands in the same split across every (donor, assay) cell 
     -> cross-individual train/dev vs test disjointness by construction
 
-    Vectorized: sha1 is evaluated once per DISTINCT genomic bin (a few 1e4 genome-wide) rather than
-    once per row, via np.unique over int64-packed (chrom, bin) keys. The hashed string is identical
-    to the per-row form.
+    Vectorized for efficiency: sha1 is evaluated once per DISTINCT genomic bin (a few 1e4 genome-wide) rather than once per row
     
     Returns an object ndarray of length len(df)
     """
@@ -241,7 +237,7 @@ def split_and_write_csvs(
     For each split, writes two files:
       - <split>.csv       : minimal Trainer input (sequence(s), label only)
       - <split>.meta.csv  : rich superset (minimal columns + meta_cols + a 'split' column),
-                            consumed by analysis/eval/plotting; row-aligned to <split>.csv
+                            used by analysis/eval/plotting; row-aligned to <split>.csv
 
     Splitting:
       - split_mode == "train_dev_test": group-aware split if group_cols is provided
@@ -483,6 +479,14 @@ def balance_as_table(
         pos = df[df[label_col] == 1]
         neg = df[df[label_col] == 0]
 
+        # flag rows whose label is neither 0 nor 1 (not eligible for binary balancing)
+        n_other = len(df) - len(pos) - len(neg)
+        if n_other:
+            _vals = pd.unique(df.loc[~df[label_col].isin([0, 1]), label_col])[:5].tolist()
+            print(f"[balance] WARNING: {n_other}/{len(df)} rows ({n_other/len(df):.1%}) have "
+                  f"{label_col!r} neither 0 nor 1 and are excluded from binary balancing; "
+                  f"values e.g. {_vals}")
+
         if pos.empty or neg.empty:
             raise ValueError("Need both positive and negative examples for global_binary balancing")
 
@@ -490,18 +494,25 @@ def balance_as_table(
         pos_sampled = pos.sample(n=n, random_state=random_state)
         neg_sampled = neg.sample(n=n, random_state=random_state)
 
+        print(f"[balance] global_binary: {len(pos):,} pos / {len(neg):,} neg -> {n:,} each "
+              f"({len(df) - 2 * n:,} of {len(df):,} rows discarded, {1 - 2 * n / len(df):.1%})")
+
         out = pd.concat([pos_sampled, neg_sampled], ignore_index=True)
         return out.sample(frac=1, random_state=random_state).reset_index(drop=True)
 
     if strategy == "per_tissue_binary":
+        if "tissue" not in df.columns:
+            raise ValueError(f"per_tissue_binary balancing requires a 'tissue' column; "
+                                f"have {sorted(df.columns)[:8]}.")
         balanced_groups = []
 
+        # NOTE: technically groups by combination of tissues (since MultiTissuePeakRowSource emits pipe-joined string of tissues)
         for tissue, group in df.groupby("tissue"):
             pos = group[group[label_col] == 1]
             neg = group[group[label_col] == 0]
 
             if pos.empty or neg.empty:
-                print(f"Skipping {tissue}: missing one class.")
+                print(f"Skipping {tissue}: missing one class...")
                 continue
 
             n = min(len(pos), len(neg))
@@ -514,7 +525,7 @@ def balance_as_table(
             print(f"{tissue}: {n} positives, {n} negatives")
 
         if not balanced_groups:
-            raise ValueError("No tissue produced a valid balanced dataset.")
+            raise ValueError("No tissue produced a valid balanced dataset :(")
 
         out = pd.concat(balanced_groups, ignore_index=True)
         return out.sample(frac=1, random_state=random_state).reset_index(drop=True)
@@ -613,7 +624,7 @@ def add_anchor_windows(
     df = df[keep].reset_index(drop=True)
 
     if df.empty:
-        raise ValueError("No windows remain after fitting fixed-length windows to contigs.")
+        raise ValueError("No windows remain after fitting fixed-length windows to contigs :(")
 
     return df
 
@@ -637,8 +648,11 @@ def add_label_columns(
     df = df[pd.notna(df[primary_label.name])].copy()
     dropped = before - len(df)
     if dropped:
-        print(f"add_label_columns: dropped {dropped} rows with undefined primary label "
-              f"'{primary_label.name}'.")
+        print(f"add_label_columns: dropped {dropped}/{before} rows ({dropped/before:.1%}) with "
+              f"undefined primary label '{primary_label.name}'.")
+    if df.empty:
+        raise ValueError(f"every one of {before} rows has an undefined primary label '{primary_label.name}'"
+                         f"-- check the LabelSpec fn and its required_columns, and that the source actually provides them.")
 
     return df
 
@@ -648,7 +662,7 @@ def make_haplotype_sequence(
     allele: str,
 ) -> str:
     """
-    Replace the SNV position in a reference sequence with the requested allele (assumes allele is a single base)
+    Replace the SNV position in a reference sequence with the requested allele (requires allele is a single base)
     """
     ref_sequence = ref_sequence.upper()
     allele = str(allele).upper()
@@ -741,8 +755,7 @@ def add_sequence_inputs(
         alt_defined = df.apply(lambda r: alt_allele_of(r) is not None, axis=1)
         n_drop = int((~alt_defined).sum())
         if n_drop:
-            print(f"ref_alt_pair: dropping {n_drop} rows with undefined alt "
-                  f"(homozygous-ref / multiallelic).")
+            print(f"ref_alt_pair: dropping {n_drop} rows with undefined alt (homozygous-ref / multiallelic).")
         df = df[alt_defined].copy()
 
     sequences = []
@@ -811,7 +824,7 @@ def add_sequence_inputs(
             hap2_seq = make_haplotype_sequence(ref_seq, snv_offset, hap2_allele) if needs_hap2 else None
 
         # Per-sequence offset/extent:
-        # Substitution-only for now, so the anchor offset is snv_offset in every sequence;
+        # Substitution-only, so the anchor offset is snv_offset in every sequence;
         # extent length is the length of that sequence's allele (1 for a variant-free anchor such as a peak summit)
         def offset_extent(allele):
             ext = max(1, len(allele)) if allele else 1
@@ -924,13 +937,9 @@ def summarize_duplicate_as_windows(
     For all-tissue AS classification, duplicates often arise because the same SNV/window appears in multiple tissues
     """
     if group_cols is None:
-        group_cols = [
-            "chr",
-            "bed_start",
-            "bed_end",
-            "ref_allele",
-            "hap1_allele",
-            "hap2_allele",
+        # emit locus_id to ensure jitter invariance
+        group_cols = ["locus_id"] if "locus_id" in df.columns else [
+            "chr", "anchor", "ref_allele", "hap1_allele", "hap2_allele",
         ]
 
     missing = [c for c in group_cols + [label_col] if c not in df.columns]
@@ -963,17 +972,18 @@ def summarize_duplicate_as_windows(
         print("\nExample conflicting groups:")
         print(conflicting_groups.head(10))
 
-    tmp.drop(columns=["_group_key"], inplace=True)
-
     return grouped
 
 def add_locus_and_example_ids(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a jitter-invariant locus_id and a unique, stable, content-based example_id
+    Add a jitter-invariant locus_id and a per-row-unique example_id
 
     - locus_id = sha1(chr|SNV)[:16]: the grouping / leakage / cross-individual-exclusion key;
       all rows for the same SNV locus (across tissues and across jitter draws) share it
-    - example_id = "<chr>:<SNV>:<tissue>:<occurrence>": unique per row within a (donor, assay) dataset
+
+    - example_id = "<chr>:<SNV>:<tissue>:<occurrence>": unique per row within a (donor, assay)
+      dataset
+      * NOTE: donor is NOT in the key, so rows that differ only by donor collide and are separated by <occurrence>
     """
     df = df.copy()
 
@@ -1113,20 +1123,21 @@ class BigWigSignalAnnotator:
                     - "snv": use one base [SNV, SNV + 1)
                     - "snv_radius": use [SNV - radius_bp, SNV + radius_bp + 1)
             radius_bp:
-                Used only when region="snv_radius".
+                Used only when region="snv_radius"
             missing_value:
-                Returned when no finite BigWig signal exists in the queried region.
+                Returned when no finite BigWig signal exists in the queried region AND when the
+                row's chromosome is absent from the BigWig
+                -- pass np.nan if you want such rows dropped instead of trained on as 0's
             use_values:
-                If True, use per-base bw.values(...) and summarize manually.
-                This is safest and gives predictable nan handling.
+                If True, use per-base bw.values(...) and summarize manually
             exact:
-                If use_values=False, pass exact=exact to bw.stats(...).
+                If use_values=False, pass exact=exact to bw.stats(...)
         """
         if pyBigWig is None:
             raise ImportError(
-                "pyBigWig is required for BigWigSignalAnnotator. "
+                "pyBigWig is required for BigWigSignalAnnotator! "
                 "Install with `pip install pyBigWig` or "
-                "`conda install pybigwig -c conda-forge -c bioconda`."
+                "`conda install pybigwig -c conda-forge -c bioconda`"
             )
 
         self.bigwig_path = bigwig_path
@@ -1137,6 +1148,11 @@ class BigWigSignalAnnotator:
         self.use_values = use_values
         self.exact = exact
 
+        if region not in {"window", "snv", "snv_radius"}:
+            raise ValueError(f"region must be one of 'window', 'snv', 'snv_radius', got {region!r}.")
+        if mode not in {"mean", "max", "min", "sum", "std", "coverage", "mean_nonzero", "max_abs"}:
+            raise ValueError(
+                f"unsupported mode {mode!r}; choose from mean, max, min, sum, std, coverage, mean_nonzero, max_abs")
         self.bw = pyBigWig.open(bigwig_path)
 
         if self.bw is None:
@@ -1147,16 +1163,29 @@ class BigWigSignalAnnotator:
             raise ValueError(f"File is not a BigWig file: {bigwig_path}")
 
         self.chrom_sizes = dict(self.bw.chroms())
+        self._unknown_chroms = {} # chrom -> rows queried; warn once per unknown contig
 
     def close(self):
         if getattr(self, "bw", None) is not None:
             self.bw.close()
             self.bw = None
 
+            def __del__(self):
+                try:
+                    self.close()
+                except Exception:
+                    pass
+
     def _query_region_from_row(self, row: pd.Series):
         chrom = row["chr"]
 
         if chrom not in self.chrom_sizes:
+            n = self._unknown_chroms.get(chrom, 0) + 1
+            self._unknown_chroms[chrom] = n
+            if n == 1:
+                print(f"[bigwig] WARNING: {chrom!r} is absent from {self.bigwig_path} -- every row "
+                      f"on it returns missing_value={self.missing_value}. BigWig has e.g. "
+                      f"{sorted(self.chrom_sizes)[:4]}. Check chromosome naming (chr1 vs 1).")
             return chrom, None, None
 
         chrom_size = self.chrom_sizes[chrom]
@@ -1178,7 +1207,7 @@ class BigWigSignalAnnotator:
         else:
             raise ValueError(
                 f"Unsupported BigWig query region {self.region!r}. "
-                "Choose from {'window', 'snv', 'snv_radius'}."
+                "Choose from {'window', 'snv', 'snv_radius'}"
             )
 
         start = max(0, start)
@@ -1204,14 +1233,13 @@ class BigWigSignalAnnotator:
             )
 
         # Faster option for common summary stats
-        # exact=True avoids zoom-level approximations
         if self.mode in {"mean", "max", "min", "std", "coverage"}:
             val = self.bw.stats(
                 chrom,
                 start,
                 end,
                 type=self.mode,
-                exact=self.exact,
+                exact=self.exact, # exact=True avoids zoom-level approximations
             )[0]
 
             if val is None or not np.isfinite(val):
@@ -1251,12 +1279,17 @@ def make_bigwig_label_spec(
         exact=exact,
     )
 
+    # the annotator reads region-dependent columns; build_dataset validates required_columns after windowing
+    _needed = {"window":     ["chr", "bed_start", "bed_end"],
+               "snv":        ["chr", "anchor"],
+               "snv_radius": ["chr", "anchor"]}[region]
+
     return LabelSpec(
         name=name,
         fn=annotator,
         task_type="regression",
         transform_fn=transform_fn,
-        required_columns=["chr"],
+        required_columns=_needed,
     )
 
 ############
@@ -1363,7 +1396,7 @@ class MultiTissuePeakRowSource(RowSource):
                             peak midpoint
         merge_window_bp   single-linkage distance for consensus clustering: consecutive summits
                             each within this distance CHAIN into one locus, so a dense run can
-                            span far more than merge_window_bp
+                            span more than merge_window_bp
         label_radius_bp   half-width of the footprint used for label + reliability reads
         background_ratio  background loci sampled per consensus locus
         background_gap_bp minimum distance from any peak when sampling background
@@ -1379,7 +1412,7 @@ class MultiTissuePeakRowSource(RowSource):
         assay: str,
         donor: str,
         genome_sizes_path: Optional[str] = None,
-        is_narrowpeak: bool = True,
+        is_narrowpeak: bool = True,    # narrowPeak input supplies signalValue
         summit_mode: str = "summit",
         merge_window_bp: int = 100,    # summits within this distance = one consensus locus
         label_radius_bp: int = 32,     # footprint for label + reliability reads (match the run)
@@ -1398,6 +1431,12 @@ class MultiTissuePeakRowSource(RowSource):
             _miss = [k for k in _req if not _d.get(k)]
             if _miss:
                 raise ValueError(f"datasets[{_i}] is missing {_miss}; got keys {sorted(_d)}.")
+
+        if genome_sizes_path is None and background_ratio > 0:
+            raise ValueError(
+                "background_ratio > 0 requires genome_sizes_path -- "
+                "chromosome sizes are needed to sample background loci and to trim loci near contig ends. "
+                "To bypass this error, input the sizes file or set background_ratio=0.")
 
         self.datasets = datasets
         self.assay = assay
@@ -1597,9 +1636,16 @@ class MultiTissuePeakRowSource(RowSource):
         for chrom, sub in consensus.groupby("chr"):
             sub = sub.reset_index(drop=True)
             mat = self._read_signal_matrix(chrom, sub["anchor"].tolist())  # (n, N) fold-change
+            with np.errstate(invalid="ignore"):
+                _lab = np.nanmean(mat, axis=1)
+                _sd  = np.nanstd(mat, axis=1)
+            _n_empty = int(np.sum(~np.isfinite(_lab)))
+            if _n_empty:
+                print(f"[multi_tissue] {chrom}: {_n_empty}/{len(_lab)} loci had no finite signal in "
+                      f"ANY track (label will be NaN) -- check BigWig chrom naming.")
             assign = dict(
-                binding_label_raw=np.nanmean(mat, axis=1),
-                cross_tissue_std=np.nanstd(mat, axis=1),
+                binding_label_raw=_lab,
+                cross_tissue_std=_sd,
                 mean_depth=sub["called_sv_mean"].to_numpy(),  # peak-call strength proxy
             )
             if self._has_pval:
@@ -1614,7 +1660,15 @@ class MultiTissuePeakRowSource(RowSource):
                 with np.errstate(invalid="ignore"):
                     col = np.nanmean(mat[:, cols], axis=1) # merge tissues within the track/group
                 m = np.isfinite(col).astype(np.int8)
-                assign[f"y_track_{gi}"] = np.log1p(np.where(m == 1, col, 0.0))
+                y = np.log1p(np.where(m == 1, col, 0.0))
+                _bad = (m == 1) & ~np.isfinite(y)
+                if _bad.any():
+                    raise ValueError(
+                        f"track {gi} ({self.track_names[gi]}): {int(_bad.sum())} loci have "
+                        f"fold-change <= -1 (min {float(np.nanmin(col[_bad])):.3f}); log1p is "
+                        f"undefined there. bigwig_path must hold NON-NEGATIVE fold-change, "
+                        f"not a log-ratio.")
+                assign[f"y_track_{gi}"] = y
                 assign[f"m_track_{gi}"] = m
             sub = sub.assign(**assign)
             parts.append(sub)
@@ -1627,9 +1681,16 @@ class MultiTissuePeakRowSource(RowSource):
         for chrom, sub in bg.groupby("chr"):
             sub = sub.reset_index(drop=True)
             mat = self._read_signal_matrix(chrom, sub["anchor"].tolist())
+            with np.errstate(invalid="ignore"):
+                _lab = np.nanmean(mat, axis=1)
+                _sd  = np.nanstd(mat, axis=1)
+            _n_empty = int(np.sum(~np.isfinite(_lab)))
+            if _n_empty:
+                print(f"[multi_tissue] background {chrom}: {_n_empty}/{len(_lab)} loci had no finite "
+                      f"signal in ANY track (label will be NaN) -- check BigWig chrom naming.")
             assign = dict(
-                binding_label_raw=np.nanmean(mat, axis=1),
-                cross_tissue_std=np.nanstd(mat, axis=1),
+                binding_label_raw=_lab,
+                cross_tissue_std=_sd,
                 mean_depth=np.nan,
                 tissue="background", n_tissues_called=0,
                 pstart=sub["anchor"], pend=sub["anchor"] + 1,
@@ -1642,7 +1703,15 @@ class MultiTissuePeakRowSource(RowSource):
                 with np.errstate(invalid="ignore"):
                     col = np.nanmean(mat[:, cols], axis=1) # merge tissues within the track/group
                 m = np.isfinite(col).astype(np.int8)
-                assign[f"y_track_{gi}"] = np.log1p(np.where(m == 1, col, 0.0))
+                y = np.log1p(np.where(m == 1, col, 0.0))
+                _bad = (m == 1) & ~np.isfinite(y)
+                if _bad.any():
+                    raise ValueError(
+                        f"track {gi} ({self.track_names[gi]}): {int(_bad.sum())} loci have "
+                        f"fold-change <= -1 (min {float(np.nanmin(col[_bad])):.3f}); log1p is "
+                        f"undefined there. bigwig_path must hold NON-NEGATIVE fold-change, "
+                        f"not a log-ratio.")
+                assign[f"y_track_{gi}"] = y
                 assign[f"m_track_{gi}"] = m
             sub = sub.assign(**assign)
             bgparts.append(sub)
@@ -1716,11 +1785,14 @@ def build_dataset(
     Source-agnostic dataset builder
 
     Composes any RowSource with a LabelSpec, validating that:
-      - input_mode is supported by the row source, and
-      - the label's required_columns are provided by the source (post-windowing)
+      1. input_mode is supported by the row source
+      2. the label's required_columns are provided by the source (post-windowing)
 
-    Writes minimal Trainer CSVs + rich .meta.csv sidecars; returns the final DataFrame
-    Leakage prevention is on by default (group by locus_id); pass group_cols=[] to disable
+    Writes minimal Trainer CSVs + rich .meta.csv sidecars; returns the PRE-WRITE DataFrame.
+    
+    NOTE: the returned frame is the state just before split_and_write_csvs, so it does NOT
+    reflect that function's filtering (N-containing sequences, exclude_loci, cross-split
+    sequence dedup, train-only balancing)
 
     If partition_spec is given and enabled, a deterministic donor-invariant train/dev/test column
     is computed (hold-out-chromosome TEST + hashed genomic bins for TRAIN/DEV) and takes priority
@@ -1763,9 +1835,11 @@ def build_dataset(
         df["_assigned_split"] = assign_split_column(df, partition_spec)
         split_col = "_assigned_split"
         _counts = pd.Series(df["_assigned_split"]).value_counts().to_dict()
+        _bnd = (f"on, ±{partition_spec.boundary_bp}bp"
+                if partition_spec.exclude_boundary and partition_spec.boundary_bp > 0 else "OFF")
         print(f"partition_spec enabled (bin_size={partition_spec.bin_size}, "
               f"fold_id={partition_spec.fold_id}, "
-              f"boundary_exclusion={'on, ±%dbp' % partition_spec.boundary_bp if partition_spec.exclude_boundary and partition_spec.boundary_bp > 0 else 'OFF'}): "
+              f"boundary_exclusion={_bnd}): "
               f"row-level split counts {_counts}")
 
         if partition_spec.exclude_boundary:
@@ -1775,6 +1849,13 @@ def build_dataset(
                     f"boundary_bp={partition_spec.boundary_bp} < {_need} = "
                     f"max(left_bp, right_bp) + jitter_max_bp; windows can reach {_need}bp from the anchor, "
                     f"so a smaller boundary_bp leaves edge-straddling windows in the split.")
+
+            if (df["_assigned_split"] == "__exclude__").any():
+                _n0 = len(df)
+                df = df[df["_assigned_split"] != "__exclude__"].copy()
+                print(f"  boundary exclusion: dropped {_n0 - len(df)} loci whose window "
+                      f"straddled a {partition_spec.bin_size}bp bin edge "
+                      f"(boundary_bp={partition_spec.boundary_bp})")
 
     if group_cols:
         summarize_duplicate_as_windows(
@@ -1802,6 +1883,14 @@ def build_dataset(
                   "mean_depth", "label_noise"]
     
     meta_cols = [c for c in meta_cols if c in df.columns]
+
+    if balance_split == "all" and balance_spec.strategy != "none":
+        _lab = df[primary_label.name]
+        _p, _n = int((_lab == 1).sum()), int((_lab == 0).sum())
+        if _p and _n and abs(_p / _n - 1.0) > 0.05:
+            print(f"[balance] NOTE: balanced to 1:1 BEFORE windowing/labelling/sequence extraction, "
+                  f"but row drops since then leave {_p:,} pos / {_n:,} neg ({_p/_n:.2f} ratio) in the "
+                  f"written data. Use balance_split='train' to balance after all drops.")
 
     split_and_write_csvs(
         df=df,
