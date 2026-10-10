@@ -42,8 +42,8 @@ def log1p_transform(x: float) -> float:
 
     return float(np.log1p(x))
 
-def identity_transform(x: float) -> float:
-    return float(x)
+def identity_transform(x):
+    return x
 
 @dataclass
 class LabelSpec:
@@ -778,6 +778,8 @@ def add_sequence_inputs(
         end = int(row["bed_end"])
         snv = int(row["anchor"])
         a2 = s2 = e2 = None
+        n_dropped_personal = 0 # dropped rows in reference -> personal liftover
+        n_no_genome = 0 # rows whose donor has no PersonalGenome (a CONFIG error, not a lift failure)
 
         ref_seq = str(ref_fasta[chrom][start:end]).upper()
 
@@ -819,6 +821,9 @@ def add_sequence_inputs(
                 continue
             hap1_seq = res["seq1"] if needs_hap1 else None
             hap2_seq = res["seq2"] if needs_hap2 else None
+            if pg is None:
+                n_no_genome += 1
+                continue
         else:
             hap1_seq = make_haplotype_sequence(ref_seq, snv_offset, hap1_allele) if needs_hap1 else None
             hap2_seq = make_haplotype_sequence(ref_seq, snv_offset, hap2_allele) if needs_hap2 else None
@@ -898,9 +903,16 @@ def add_sequence_inputs(
         tot = sum(g.stats["total"] - _stats_before[d].get("total", 0) for d, g in personal_genomes.items())
         ok  = sum(g.stats["ok"]    - _stats_before[d].get("ok", 0)    for d, g in personal_genomes.items())
         rate = (ok / tot) if tot else float("nan")
+
         print(f"[personal] kept {len(keep_pos)}/{len(df)} rows "
               f"(dropped {n_dropped_personal} unliftable/allele-mismatch); "
-              f"allele-match rate={rate:.3f} (low => hetSNV vs vcf2diploid reference mismatch)")
+              f"allele-match rate={rate:.3f} (low => hetSNV vs vcf2diploid reference mismatch).")
+        if n_no_genome:
+            _seen = sorted(set(df["donor"].astype(str)) - set(personal_genomes)) if has_donor_col else []
+            print(f"[personal] WARNING: {n_no_genome} further rows dropped because their donor has "
+                  f"no personal genome (donors in data but not in personal_genomes: {_seen}; "
+                  f"available: {sorted(personal_genomes)}). This is a CONFIG error, not a lift "
+                  f"failure -- it is excluded from the allele-match rate above.")
 
     if len(keep_pos) < len(df):
         df = df.iloc[keep_pos].reset_index(drop=True)
