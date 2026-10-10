@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 
 """
-Config-driven entexBERT-2 dataset runner (2-stage ASB pipeline).
+entexbert2.build_experiment -- config-driven entexBERT-2 dataset runner (2-stage ASB pipeline)
 
 Each experiment is a declarative config (YAML or JSON); this runner composes a row source
 with a primary label and calls the source-agnostic build_dataset in entexbert2.build_inputs.
-New formats are added by (1) implementing a RowSource / make_*_label_spec in build_inputs and
-(2) registering it in ROW_SOURCE_BUILDERS / LABEL_BUILDERS below. New *experiments* need no code.
 
-Two live pipelines:
+New formats are added by:
+    1. implementing a RowSource / make_*_label_spec in build_inputs
+    2. registering it in ROW_SOURCE_BUILDERS / LABEL_BUILDERS below. 
+
+New *experiments* need no new code!
+
+For 2-stage entexBERT-2 on ASB classification:
 
   Stage 1 (binding trunk):      row_source multi_tissue_peak + label bigwig / multitrack
   Stage 2 (ASB contrast head):  row_source hap_counts + label as_class, with
                                 depth_col: n  (n carried through as the privileged weight)
 
-Usage:
+Usage examples:
     python build_experiment.py configs/stage2_ctcf_asb.yaml
-    python build_experiment.py exp.yaml --ref_fasta /data/hg38.fa --output_dir runs/foo
+    python build_experiment.py exp.yaml --ref_fasta /data/hg38.fa --output_dir runs/run_name
+
+File written by Amy Metrick in collaboration with Anthropic's Claude Science Opus 5 Agent
+
+** Config formating details: **
 
 ===========================================================================
 TOP LEVEL                                        (* = required)
@@ -180,48 +188,12 @@ HEAD   head: {...}          architecture only -- `task` is DERIVED from the labe
                             contrast distance s = ||P(h1) - P(h2)||    [128]
     num_labels              DERIVED -- forced to 1, or to num_tracks for multitrack.
                             A conflicting value is overridden with a note.
+
     NOTE: any other key here is passed through to experiment_config.json for provenance
     but does NOT reach the model. The trainer flags set the architecture; this runner
     prints the mapping (see emit_finetune_settings). In particular head_activation is a
     finetune_entexbert2.py flag, and it is REQUIRED for head_num_layers >= 2 -- model_io
     raises when a checkpoint's run_config.json lacks it.
-
-Example (Stage 2, ASB head):
-
-    experiment: stage2_ctcf_asb
-    ref_fasta: /data/hg38.fa
-    output_dir: runs/stage2_ctcf_asb
-    row_source: {type: hap_counts, path: ctcf_hap_counts.csv, donor: ENC-002, assay: CTCF}
-    primary_label: {type: as_class}
-    sequence: {input_mode: hap_pair, mode: reference}
-    window: {left_bp: 128, right_bp: 128, offset_mode: fixed, jitter_max_bp: 0,
-             chrom_sizes: /data/hg38.chrom.sizes}
-    balance: {strategy: none}
-    split: {mode: train_dev_test, ratio: [0.8, 0.1, 0.1], seed: 42, group: locus}
-    head: {proj_dim: 128, head_num_layers: 1, head_hidden_size: -1}
-    depth_col: n
-    partition: {enabled: true, bin_size: 100000, salt: entexbert2_v1, fold_id: 0,
-                fold_assignment: {chr5: 0, chr12: 0}, exclude_boundary: true}
-
-Example (Stage 1, binding trunk):
-
-    experiment: stage1_ctcf_binding
-    ref_fasta: /data/hg38.fa
-    output_dir: runs/stage1_ctcf_binding
-    row_source:
-      type: multi_tissue_peak
-      assay: CTCF
-      donor: ENC-002
-      genome_sizes: /data/hg38.chrom.sizes
-      tissue_tracks:
-        - {tissue: liver, peak_path: liver.narrowPeak, bigwig_path: liver.fc.bw}
-        - {tissue: lung,  peak_path: lung.narrowPeak,  bigwig_path: lung.fc.bw}
-    primary_label: {type: bigwig, path: liver.fc.bw, signal_mode: max,
-                    region: snv_radius, radius_bp: 20}
-    sequence: {input_mode: ref_single}
-    window: {left_bp: 128, right_bp: 128, chrom_sizes: /data/hg38.chrom.sizes}
-    head: {head_num_layers: 2, head_hidden_size: 128}
-    partition: {enabled: true, fold_assignment: {chr5: 0, chr12: 0}, fold_id: 0}
 """
 
 import argparse
@@ -265,9 +237,7 @@ def get_transform_fn(name):
 # ---------------------------------------------------------------------------
 
 def _narrowpeak_flag(fmt):
-    """`format` selects narrowPeak vs BED3. Validate it: any unrecognised value silently
-    selected BED3, where every peak gets signalValue=1.0 -- making the consensus summit
-    tiebreak and the mean_depth proxy constant."""
+    """`format` selects narrowPeak vs BED3"""
     f = str(fmt).strip().lower()
     if f not in {"narrowpeak", "bed3"}:
         raise ValueError(f"row_source.format must be 'narrowpeak' or 'bed3', got {fmt!r}.")
@@ -318,8 +288,6 @@ def _label_name(cfg, fallback):
     return cfg.get("name") or cfg.get("target_name") or fallback
 
 def _build_bigwig(cfg, tf):
-    # use_values/exact default to the safest path: read per-base values and summarize them
-    # here, rather than bw.stats zoom levels. Defaults match the previous hardcoded values.
     return make_bigwig_label_spec(
         name=_label_name(cfg, "bigwig"),
         bigwig_path=cfg["path"],
@@ -338,12 +306,7 @@ def _build_column(cfg, tf):
     )
 
 def _build_as_class(cfg, tf):
-    # Binary allele-specific-binding label (e.g. imbalance_significance, 0/1) read directly
-    # from a precomputed source column. task_type="classification" drives the contrast head.
-    # Default column matches the hap_counts source's significance column.
-
-    # a binary classification label must stay 0/1 -- log1p would map 1 -> 0.693 and silently
-    # break both the balancer's ==1/==0 selection and the BCE target
+    # Binary ASB label (e.g. imbalance_significance, 0/1) read directly from a precomputed source column
     if tf is not identity_transform:
         raise ValueError(
             f"primary_label type 'as_class' is a binary 0/1 classification target; "
@@ -358,12 +321,7 @@ def _build_as_class(cfg, tf):
     )
 
 def _build_multitrack(cfg, tf):
-    # Multi-track Stage-1 binding target: predict one (transformed) value per tissue track.
-    # The row source (multi_tissue_peak) emits y_track_0..y_track_{T-1} and m_track_0.. mask
-    # columns; this label does NOT compute a value itself. Its `name` is a sentinel column that
-    # build_dataset uses for split/dedup bookkeeping (we point it at binding_label_raw, the mean,
-    # which always exists) while the real per-track targets ride through count_cols untouched.
-    # `num_tracks` is validated downstream against the emitted y_track_* columns.
+    # Multi-track Stage-1 binding target: predict one (transformed) value per tissue track
     n = int(cfg["num_tracks"])
     if n < 2:
         raise ValueError(f"multitrack label needs num_tracks >= 2, got {n}.")
@@ -373,12 +331,11 @@ def _build_multitrack(cfg, tf):
         task_type="regression",
         transform_fn=tf,
     )
-    # stash the track count + column names so run_from_config can wire count_cols + head width.
+    # stash the track count + column names so run_from_config can wire count_cols + head width
     spec.multitrack_num_tracks = n
     spec.multitrack_y_cols = [f"y_track_{i}" for i in range(n)]
     spec.multitrack_m_cols = [f"m_track_{i}" for i in range(n)]
     return spec
-
 
 LABEL_BUILDERS = {
     "bigwig": _build_bigwig,               # Stage 1 binding signal
@@ -425,9 +382,6 @@ def load_config(path):
             return cfg
     raise ValueError(f"Unsupported config extension {ext!r}; use .yaml/.yml/.json.")
 
-# Known schema (mirrors the module docstring). Unknown keys are reported, not rejected:
-# a typo'd section silently drops a whole block (partiton: -> no deterministic split),
-# and a typo'd key silently falls back to its default.
 _SCHEMA = {
     None:            {"ref_fasta", "output_dir", "row_source", "primary_label", "experiment",
                       "window", "sequence", "split", "balance", "partition", "head",
@@ -444,8 +398,7 @@ _SCHEMA = {
 }
 
 def warn_unknown_keys(cfg):
-    """Report config keys this runner never reads. Warn-only: extra keys stay harmless,
-    but a typo that silently disables a whole block becomes visible."""
+    """Report config keys this runner never reads"""
     for section, known in _SCHEMA.items():
         block = cfg if section is None else cfg.get(section)
         if not isinstance(block, dict):
@@ -468,17 +421,9 @@ def load_exclude_loci(meta_paths):
 
 def build_partition_spec(cfg):
     """
-    Build a PartitionSpec from an optional top-level `partition:` config block. Returns None when
-    the block is absent or partition.enabled is false (in which case build_dataset falls back to
-    the group-shuffle split — fully backward-compatible).
-
-    `fold_assignment` maps chromosome -> fold index
-    (the chromosome whose fold index == fold_id becomes the TEST set),
-    the rest are hashed into train/dev
-
-    Config block: see the PARTITION section of the module docstring for all ten keys
-    and their defaults. `fold_assignment` maps chromosome -> fold index; the chromosomes
-    whose fold index == fold_id become TEST, the rest are hashed into train/dev.
+    Build a PartitionSpec from an optional top-level `partition:` config block
+    Returns None when the block is absent or partition.enabled is false 
+    (in which case build_dataset falls back to the group-shuffle split)
     """
     pcfg = cfg.get("partition")
     if not pcfg or not pcfg.get("enabled", False):
@@ -494,9 +439,7 @@ def build_partition_spec(cfg):
             f"(folds {sorted(set(fold_assignment.values()))}); the TEST set would be empty."
         )
 
-    # boundary_bp defaults to the FURTHEST extent a window can reach from the anchor:
-    # max(left_bp, right_bp) + jitter_max_bp. build_dataset enforces exactly this minimum, so
-    # omitting the jitter term made `exclude_boundary: true` + jitter fail with the default.
+    # boundary_bp defaults to the FURTHEST extent a window can reach from the anchor: max(left_bp, right_bp) + jitter_max_bp
     _wcfg = cfg.get("window", {}) or {}
     _default_bp = (max(int(_wcfg.get("left_bp", 0)), int(_wcfg.get("right_bp", 0)))
                    + int(_wcfg.get("jitter_max_bp", 0) or 0))
@@ -515,14 +458,7 @@ def build_partition_spec(cfg):
 
 def resolve_head(head, primary_label):
     """
-    Derive/validate the finetune head config from the primary label's task_type so the two
-    can't disagree. The config's `head` block only needs architecture (head_hidden_size, 
-    and for classification proj_dim). It also DERIVES num_labels (1, or
-    num_tracks for a multitrack label) and multitrack; both are outputs, not inputs, and
-    num_labels must be passed to the trainer for a multi-track run. The 2-stage ASB model supports:
-      - task="regression"     : Stage-1 binding trunk, single-window score (num_labels=1
-                                scalar, or T tissue tracks for multi-track supervision)
-      - task="classification" : Stage-2 ASB contrast head, s=||P(h1)-P(h2)||, p=sigma(a·s+b)
+    Derive/validate the finetune head config from the primary label's task_type
     """
     head = dict(head or {})
     task = primary_label.task_type  # comes from the label
@@ -561,7 +497,7 @@ def resolve_head(head, primary_label):
     return head
 
 def emit_finetune_settings(head, output_dir, primary_name, depth_col):
-    """Print the finetune settings recorded for this dataset (verified flags only)."""
+    """Print the finetune settings recorded for this dataset (verified flags only)"""
     print("\nFinetune settings (map to finetune_entexbert2.py):")
     print(f"  --task {head['task']}")
     print(f"  --head_num_layers {head['head_num_layers']}  (1 = linear, >1 = MLP)")
@@ -587,7 +523,7 @@ def emit_finetune_settings(head, output_dir, primary_name, depth_col):
 # ---------------------------------------------------------------------------
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Run an entexBERT-2 dataset generation experiment from a config.")
+    p = argparse.ArgumentParser(description="Run an entexBERT-2 dataset generation experiment from a config")
     p.add_argument("config", help="Path to the experiment config (.yaml/.yml/.json)")
     p.add_argument("--ref_fasta", default=None, help="Override ref_fasta from the config")
     p.add_argument("--output_dir", default=None, help="Override output_dir from the config")
@@ -612,20 +548,19 @@ def build_personal_genomes(seqcfg):
     if _unpaired:
         raise ValueError(
             f"sequence.hap_fastas and sequence.chains disagree on donors {_unpaired}: each donor "
-            f"needs BOTH entries. hap_fastas has {sorted(hap_fastas)}, chains has {sorted(chains)}. "
-            f"An unpaired donor gets no personal genome, and every one of its rows is then "
-            f"silently dropped during window extraction.")
+            f"needs BOTH entries. hap_fastas has {sorted(hap_fastas)}, chains has {sorted(chains)}")
     if not donors:
         raise ValueError("sequence.mode='personal' needs matching donors in "
                          "sequence.hap_fastas and sequence.chains.")
     genomes = {}
     for d in donors:
-        h1_fa, h2_fa = hap_fastas[d]
-        mat_chain, pat_chain = chains[d]
         for _key, _val in (("hap_fastas", hap_fastas[d]), ("chains", chains[d])):
             if not isinstance(_val, (list, tuple)) or len(_val) != 2:
                 raise ValueError(f"sequence.{_key}[{d!r}] must be a 2-element list "
                                  f"[hap1/maternal, hap2/paternal], got {_val!r}.")
+
+        h1_fa, h2_fa = hap_fastas[d]
+        mat_chain, pat_chain = chains[d]
         genomes[d] = PersonalGenome(
             parse_chain_file(mat_chain), Fasta(h1_fa),
             parse_chain_file(pat_chain), Fasta(h2_fa),
@@ -638,8 +573,13 @@ def build_personal_genomes(seqcfg):
 def run_from_config(cfg, ref_fasta=None, output_dir=None):
     """
     Build a dataset from a config dict,
-    ref_fasta / output_dir override the config when provided,
-    returns the final DataFrame; importable for notebooks/tests!
+    ref_fasta / output_dir override the config when provided
+    
+    returns the PRE-WRITE DataFrame from build_dataset (before the writer's N-sequence,
+    exclude_loci, cross-split-dedup and boundary filtering), so len(df) can exceed the
+    rows actually written; read train/dev/test.csv for the final data
+    
+    Importable for notebooks/tests!
     """
     name = cfg.get("experiment", "experiment")
     warn_unknown_keys(cfg)
@@ -664,7 +604,14 @@ def run_from_config(cfg, ref_fasta=None, output_dir=None):
     scfg = cfg.get("split", {})
     seed = scfg.get("seed", 42)
     split_mode = scfg.get("mode", "train_dev_test")
-    group_cols = ["locus_id"] if scfg.get("group", "locus") == "locus" else []
+    
+    _group = scfg.get("group", "locus")
+    if _group not in {"locus", "", "none", None}:
+        raise ValueError(
+            f"split.group must be 'locus' (group rows by locus_id -- the leakage control that "
+            f"keeps a locus out of two splits) or ''/'none' to disable it; got {_group!r}.")
+    group_cols = ["locus_id"] if _group == "locus" else []
+
     split_ratio = tuple(scfg.get("ratio", (0.8, 0.1, 0.1)))
     skip_ambiguous = scfg.get("skip_ambiguous", True)
     exclude_loci = load_exclude_loci(scfg.get("exclude_loci_meta")) or None
@@ -741,8 +688,21 @@ def run_from_config(cfg, ref_fasta=None, output_dir=None):
     partition_resolved = dataclasses.asdict(partition_spec) if partition_spec is not None else None
     with open(os.path.join(output_dir, "experiment_config.json"), "w") as f:
         json.dump({"experiment": name, "resolved": cfg, "head_resolved": head,
-                   "partition_resolved": partition_resolved,
-                   "ref_fasta": ref_fasta_path, "output_dir": output_dir}, f, indent=2)
+            "partition_resolved": partition_resolved,
+            # the raw `cfg` above records only what the user WROTE; 
+            # this records what the runner actually used, so defaults are reproducible without the code version
+            "runtime_resolved": {
+                "window": dataclasses.asdict(window_spec),
+                "balance": dataclasses.asdict(balance_spec),
+                "balance_split": balance_split,
+                "split_mode": split_mode, "split_ratio": list(split_ratio),
+                "seed": seed, "group_cols": group_cols,
+                "skip_ambiguous": skip_ambiguous,
+                "dedup_across_splits": dedup_across_splits,
+                "input_mode": input_mode, "sequence_mode": sequence_mode,
+                "depth_col": depth_col, "count_cols": count_cols,
+            },
+            "ref_fasta": ref_fasta_path, "output_dir": output_dir}, f, indent=2)
 
     print("Loading reference FASTA...")
     ref = Fasta(ref_fasta_path)
