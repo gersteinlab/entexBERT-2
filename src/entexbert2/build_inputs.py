@@ -13,8 +13,8 @@ Current scope: TF binding affinity, ASB datasets
 
 New sources/labels can be added by:
 1. Writing the desired RowSource construction and make_*_label_spec function here
-2. Add the new RowSource class to run_experiment.ROW_SOURCE_BUILDERS
-3. Add the new LabelSpec builder function to run_experiment.LABEL_BUILDERS
+2. Add the new RowSource class to build_experiment.ROW_SOURCE_BUILDERS
+3. Add the new LabelSpec builder function to build_experiment.LABEL_BUILDERS
 
 File written by Amy Metrick in collaboration with Anthropic's Claude Science Opus 5 Agent
 """
