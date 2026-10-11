@@ -13,6 +13,7 @@ import os
 import numpy as np
 import pandas as pd
 from pyfaidx import Fasta
+from sklearn.metrics import roc_auc_score, average_precision_score
 
 _BASECOL = {"A": "cA", "C": "cC", "G": "cG", "T": "cT"}
 
@@ -140,6 +141,67 @@ def build_windows(df, ref_fasta, left_bp, right_bp, chrom_col, pos_col, refbase_
               f"(check pos_is_1based); ~100% suggests strand-flipped alleles; a few % is normal.")
 
     return seqs1, seqs2, np.array(keep, dtype=bool)
+
+def balanced_auroc(score, label, seed=1, n_boot=1000, cover=None, n_qbins=20):
+    # cover=None -> random balance (original behavior)
+    # cover given -> COVERAGE-MATCHED balance:
+    # subsample the larger class so its coverage (depth) distribution matches the smaller class
+
+    score = np.asarray(score, dtype=float)
+    label = np.asarray(label, dtype=int)
+
+    pos_idx = np.where(label == 1)[0]
+    neg_idx = np.where(label == 0)[0]
+    m = min(len(pos_idx), len(neg_idx))
+
+    if m < 10:
+        return np.nan, np.nan, (np.nan, np.nan), m
+
+    rng = np.random.default_rng(seed)
+
+    if cover is None:
+        if len(neg_idx) >= len(pos_idx):
+            sel_neg = rng.choice(neg_idx, size=m, replace=False); sel_pos = pos_idx
+        else:
+            sel_pos = rng.choice(pos_idx, size=m, replace=False); sel_neg = neg_idx
+    else:
+        # match the LARGER class's log-coverage distribution to the SMALLER class (quantile bins)
+        lc = np.log1p(np.clip(np.asarray(cover, dtype=float), 0, None))
+        small = pos_idx if len(pos_idx) <= len(neg_idx) else neg_idx
+        large = neg_idx if len(pos_idx) <= len(neg_idx) else pos_idx
+        edges = np.quantile(lc[small], np.linspace(0, 1, n_qbins + 1))
+        edges[0] -= 1e-6; edges[-1] += 1e-6
+        sb = np.digitize(lc[small], edges); lb = np.digitize(lc[large], edges)
+        picks = []
+
+        for b in np.unique(sb):
+            pool = large[lb == b]; want = int((sb == b).sum())
+            if len(pool):
+                picks.append(rng.choice(pool, size=want, replace=len(pool) < want))
+
+        sel_large = np.concatenate(picks) if picks else large[:0]
+        
+        if len(pos_idx) <= len(neg_idx):
+            sel_pos, sel_neg = small, sel_large
+        else:
+            sel_pos, sel_neg = sel_large, small
+
+    m = min(len(sel_pos), len(sel_neg))
+    idx = np.concatenate([sel_pos, sel_neg])
+    y = label[idx]; s = score[idx]
+
+    point = roc_auc_score(y, s)
+    aupr = average_precision_score(y, s)
+    boots = []
+
+    for _ in range(n_boot):
+        b = rng.integers(0, len(idx), len(idx))
+        if len(np.unique(y[b])) < 2:
+            continue
+        boots.append(roc_auc_score(y[b], s[b]))
+
+    lo, hi = (np.percentile(boots, [2.5, 97.5]) if boots else (np.nan, np.nan))
+    return point, aupr, (lo, hi), m
 
 def score_pairs(df, seqs1, seqs2, keep, checkpoint_dir, batch_size=64, device="cuda", overrides=None, dump_embeddings=False):
     from entexbert2.model_io import run_inference # IMPORTANT so torch is not imported here unecessarily!
