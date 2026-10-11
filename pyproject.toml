@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "entexbert2"
+version = "0.1.0"
+description = "Two-stage transfer learning in a DNA transformer for predicting allele-specific behavior, built on a modified DNABERT-2 backbone"
+authors = [
+  {name = "Amy Metrick"},
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+keywords = ["genomics", "allele-specific binding", "DNABERT", "EN-TEx", "transfer learning"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "scikit-learn",
+  "pyfaidx",
+  "pyBigWig",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+# Model definition, training and scoring -- required by entexbert2.model, model_io and finetune_entexbert2
+model = [
+  "torch",
+  "transformers",
+  "safetensors",
+  "peft",
+]
+
+# For analysis and figure scripts under entexbert2.analysis
+analysis = [
+  "matplotlib",
+  "logomaker",
+  "memelite",
+]
+
+all = [
+  "entexbert2[model]",
+  "entexbert2[analysis]",
+]
+
+[project.urls]
+Repository = "https://github.com/gersteinlab/entexBERT-2"
+
+[project.scripts]
+# `entexbert2-build path/to/config.yaml` == `python -m entexbert2.build_experiment ...`
+entexbert2-build = "entexbert2.build_experiment:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# the config.json / tokenizer files of the vendored backbone are data, not modules
+"*" = ["*.json"]
