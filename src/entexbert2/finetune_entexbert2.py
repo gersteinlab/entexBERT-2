@@ -20,7 +20,7 @@ import copy
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, Dict, Sequence, Tuple, List, Union
+from typing import Any, Optional, Dict, Sequence, Tuple, Union
 
 import torch
 import transformers
@@ -70,7 +70,7 @@ class ModelArguments:
 @dataclass
 class DataArguments:
     data_path: str = field(default=None, metadata={"help": "Path to the training data."})
-    kmer: int = field(default=-1, metadata={"help": "k-mer for input sequence. -1 means not using k-mer."})
+    # MODIFIED: removed kmer argument (was DNABERT(1) legacy)
     # NEW: regression task capabilities and streamline haplotype pair input format ######################################################################################
     task: str = field(default="regression", metadata={"help": "'regression' (Stage-1 binding trunk, single window) or 'classification' (Stage-2 ASB contrast head)"})
     input_mode: str = field(default="hap_pair", metadata={"help": "'hap_pair' (twin, Stage 2) or 'ref_single' (one window, Stage 1)"})
@@ -120,40 +120,15 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
 
 # MODIFIED: removed unused "get_alter_of_dna_sequence" function from original DNABERT-2 train code
-
-"""
-Transform a dna sequence to k-mer string
-"""
-def generate_kmer_str(sequence: str, k: int) -> str:
-    """Generate k-mer string from DNA sequence."""
-    return " ".join([sequence[i:i+k] for i in range(len(sequence) - k + 1)])
-
-"""
-Load or generate k-mer string for each DNA sequence. The generated k-mer string will be saved to the same directory as the original data with the same name but with a suffix of "_{k}mer".
-"""
-def load_or_generate_kmer(data_path: str, texts: List[str], k: int) -> List[str]:
-    """Load or generate k-mer string for each DNA sequence."""
-    kmer_path = data_path.replace(".csv", f"_{k}mer.json")
-    if os.path.exists(kmer_path):
-        logging.warning(f"Loading k-mer from {kmer_path}...")
-        with open(kmer_path, "r") as f:
-            kmer = json.load(f)
-    else:        
-        logging.warning(f"Generating k-mer...")
-        kmer = [generate_kmer_str(text, k) for text in texts]
-        with open(kmer_path, "w") as f:
-            logging.warning(f"Saving k-mer to {kmer_path}...")
-            json.dump(kmer, f)
-        
-    return kmer
+# MODIFIED: removed "generate_kmer)str" and "load_or_generate_kmer" since entexBERT-2 uses only BPE tokenization
 
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
+    # MODIFIED: removed kmer argument (DNABERT(1) legacy)
     def __init__(self, 
                  data_path: str, 
-                 tokenizer: transformers.PreTrainedTokenizer, 
-                 kmer: int = -1,
+                 tokenizer: transformers.PreTrainedTokenizer,
                  input_mode: str = "hap_pair"): # NEW: hap_pair reads two windows per example
 
         super(SupervisedDataset, self).__init__()
@@ -201,24 +176,7 @@ class SupervisedDataset(Dataset):
         self.depth = [float(r["depth"]) for r in rows] if "depth" in cols else None
         ####################################################################################################
 
-        if kmer != -1:
-            # only write file on the first process
-            if torch.distributed.get_rank() not in [0, -1]:
-                torch.distributed.barrier()
-
-            logging.warning(f"Using {kmer}-mer as input...")
-
-            # MODIFIED: k-merize *each* window of the pair (or the single sequence)
-            if input_mode == "hap_pair":
-                flat = [s for pair in texts for s in pair]
-                flat = load_or_generate_kmer(data_path, flat, kmer)
-                texts = [[flat[2 * i], flat[2 * i + 1]] for i in range(len(texts))]
-            else:
-                texts = load_or_generate_kmer(data_path, texts, kmer)
-            #######################################################################
-
-            if torch.distributed.get_rank() == 0:
-                torch.distributed.barrier()
+        # MODIFIED: removed kmer != -1 branch
 
         # MODIFIED: for hap_pair, tokenize the two windows SEPARATELY rather than [SEP]-concatenating
         self.input_mode = input_mode
@@ -477,26 +435,6 @@ def train():
                         "change config and re-run to use a different classification metric).")
     ###############################################################################################
 
-    # NEW: reconcile head width with the dataset before building the model #################
-    _ds_labels = train_dataset.num_labels
-    if model_args.num_labels == 1 and _ds_labels > 1:
-        raise ValueError(
-            f"{data_args.data_path}/train.csv has {_ds_labels} y_track_* columns (multi-track) "
-            f"but --num_labels is 1, which would train a scalar head. Pass --num_labels {_ds_labels}.")
-    if model_args.num_labels != _ds_labels:
-        raise ValueError(
-            f"--num_labels {model_args.num_labels} disagrees with the dataset's {_ds_labels} "
-            f"target column(s) -- fix them to match!")
-    #########################################################################################
-
-    # NEW: multi-track Stage-1 needs the observed tissue mask to reach compute_metrics ######
-    if model_args.num_labels > 1:
-        training_args.label_names = ["labels", "label_mask"]
-    else:
-        # no label mask for other input paradigms
-        training_args.label_names = ["labels"]
-    #########################################################################################
-
     # NEW: validate input_mode ###########################################################################
     if data_args.input_mode not in ("hap_pair", "ref_single"):
         raise ValueError(f"--input_mode must be 'hap_pair' or 'ref_single', got {data_args.input_mode!r}.")
@@ -518,15 +456,34 @@ def train():
     # define datasets and data collator [MODIFIED: added input_mode=data_args.input_mode for hap_pair]
     train_dataset = SupervisedDataset(tokenizer=tokenizer,
                                     data_path=os.path.join(data_args.data_path, "train.csv"),
-                                    kmer=data_args.kmer, input_mode=data_args.input_mode)
+                                    input_mode=data_args.input_mode)
     val_dataset = SupervisedDataset(tokenizer=tokenizer, 
                                     data_path=os.path.join(data_args.data_path, "dev.csv"), 
-                                    kmer=data_args.kmer, input_mode=data_args.input_mode)
+                                    input_mode=data_args.input_mode)
     test_dataset = SupervisedDataset(tokenizer=tokenizer, 
                                     data_path=os.path.join(data_args.data_path, "test.csv"), 
-                                    kmer=data_args.kmer, input_mode=data_args.input_mode)
+                                    input_mode=data_args.input_mode)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
+    # NEW: reconcile head width with the dataset before building the model #################
+    _ds_labels = train_dataset.num_labels
+    if model_args.num_labels == 1 and _ds_labels > 1:
+        raise ValueError(
+            f"{data_args.data_path}/train.csv has {_ds_labels} y_track_* columns (multi-track) "
+            f"but --num_labels is 1, which would train a scalar head. Pass --num_labels {_ds_labels}.")
+    if model_args.num_labels != _ds_labels:
+        raise ValueError(
+            f"--num_labels {model_args.num_labels} disagrees with the dataset's {_ds_labels} "
+            f"target column(s) -- fix them to match!")
+    #########################################################################################
+
+    # NEW: multi-track Stage-1 needs the observed tissue mask to reach compute_metrics ######
+    if model_args.num_labels > 1:
+        training_args.label_names = ["labels", "label_mask"]
+    else:
+        # no label mask for other input paradigms
+        training_args.label_names = ["labels"]
+    #########################################################################################
 
     # MODIFIED: load entexBERT-2 model
     model = entexBERT2ForSequencePrediction(
