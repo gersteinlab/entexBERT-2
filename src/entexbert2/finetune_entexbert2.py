@@ -1,4 +1,4 @@
-'''
+"""
 This script is a modified version of the DNABERT-2 finetuning script,
 found at https://github.com/MAGICS-LAB/DNABERT_2/blob/main/finetune/train.py
 
@@ -12,7 +12,7 @@ All modifications to the original script are wrapped in comments in the followin
 #############################################################
 
 Last modified: 10/13/2026 by Amy Metrick
-'''
+"""
 
 import os
 import csv

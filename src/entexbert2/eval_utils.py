@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-"""eval_utils.py -- shared helpers for post-hoc scoring and interpretability:
+"""
+entexbertw.eval_utils -- shared helpers for post-hoc scoring and interpretability:
 - hetSNV data loading
 - train/test data leakage filter
 - window construction

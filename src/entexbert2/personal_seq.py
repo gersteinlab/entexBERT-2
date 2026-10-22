@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 """
-personal_seq.py -- lift hg38 reference loci into an individual's phased haplotype genomes and extract personal windows
+entexbert2.personal_seq
+
+Use: lift hg38 reference loci into an individual's phased haplotype genomes and extract personal windows
 
 Two vcf2diploid liftOver chains per individual map the reference to each haplotype:
     ENC00X_maternal.chain   REF -> maternal    (hap1)
