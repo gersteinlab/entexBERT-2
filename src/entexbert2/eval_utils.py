@@ -62,6 +62,15 @@ def load_hetsnv(path, assay, min_total_reads):
         n0 = len(df)
         df = df[df["total_reads"] >= min_total_reads].reset_index(drop=True)
         print(f"[filter] total_reads>={min_total_reads}: {len(df)}/{n0} rows kept")
+    
+    # validate the label is binary
+    _sig = df["imbalance_significance"]
+    _bad = sorted(set(pd.unique(_sig.dropna())) - {0, 1})
+    _nan = int(_sig.isna().sum())
+    if _bad or _nan:
+        raise ValueError(
+            f"{path}: imbalance_significance must be 0 or 1; found {_bad}"
+            + (f" plus {_nan} NaN" if _nan else ""))
     df["label"] = df["imbalance_significance"].astype(int)
 
     return df
