@@ -14,6 +14,8 @@ entexbert2.analysis.ism_saliency -- calculates ISM saliency from any entexBERT-2
     importance[w, i] = +mean_{b != ref nucleotide} delta[w, i, b]
     * positive sign since mutating away from ref nucleotide is likely to create more contrast 
         (so delta[w, i, b] > 0, which matches importance[w, i] > 0 goal) *
+
+File written by Amy Metrick in collaboration with Anthropic's Claude Science Opus 5 Agent
 """
 import argparse, numpy as np, pandas as pd
 
