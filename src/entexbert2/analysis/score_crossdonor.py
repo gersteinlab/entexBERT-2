@@ -86,16 +86,25 @@ def verify_folds(exp_root, assay, arm, train_donor, donors, bin_size):
             leaked = True
 
     if len(test_sets) > 1:
-        # compare bins, not loci
-        bins = {d: {(c, p // bin_size) for c, p in t} for d, t in test_sets.items()}
-        stray = {d: len(b - set().union(*[v for k, v in bins.items() if k != d]))
-                 for d, b in bins.items()}
-        if any(stray.values()):
-            print(f"[verify_folds] WARNING: some donors hold test bins no other donor has "
-                  f"({stray}) -- the Stage-2 fold may not be shared!")
+        # check that no test binds for one donor end up in train or dev for another
+        seen_by = {}
+        for d in test_sets:
+            s = set()
+            for split in ("train", "dev"):
+                p = meta(d, split)
+                if os.path.exists(p):
+                    s |= {(c, q // bin_size) for c, q in _meta_coords(p)}
+            seen_by[d] = s
+        tbins = {d: {(c, q // bin_size) for c, q in t} for d, t in test_sets.items()}
+        bad = {f"{d1}.test n {d2}.train/dev": len(tbins[d1] & seen_by[d2])
+               for d1 in tbins for d2 in seen_by
+               if d1 != d2 and seen_by[d2] and tbins[d1] & seen_by[d2]}
+        if bad:
+            print(f"[verify_folds] WARNING: the fold is INCONSISTENT across donors -- bins that are "
+                  f"test for one donor are train/dev for another: {bad}")
         else:
-            print(f"[verify_folds] fold is correctly shared: all {len(bins)} donors draw test loci from one "
-                  f"common bin pool ({len(set().union(*bins.values()))} bins)")
+            cov = {d: len(t) for d, t in test_sets.items()}
+            print(f"[verify_folds] fold is consistent: no donor's test bin is any other donor's train/dev bin!")
 
     return not leaked
 
