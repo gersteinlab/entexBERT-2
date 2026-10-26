@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-entexbert2.model_io - shared model I/O for entexBERT-2 evaluation, scoring, and interpretability
+entexbert2.model_io -- shared model I/O for entexBERT-2 evaluation, scoring, and interpretability
 
 File written by Amy Metrick in collaboration with Claude Science Opus 5 Agent
 """
@@ -94,11 +94,17 @@ def load_model_weights(model: torch.nn.Module, weights_path: str) -> torch.nn.Mo
 
     # If the trained head didn't load, flag if the head params differ from expected by task
     task = getattr(model, "task", "regression")
-    head_prefixes = ("main_head",) if task == "regression" else ("proj", "dist_a", "dist_b")
+
+    variant = getattr(model, "head_variant", "twin")
+    if task == "regression" or variant == "single":
+        head_prefixes = ("main_head",)
+    else:
+        head_prefixes = ("proj", "dist_a", "dist_b")
+
     head_missing = [k for k in missing if k.startswith(head_prefixes)]
     if head_missing:
         raise RuntimeError(
-            f"{task} head weights did not load ({head_missing[:5]}...). The checkpoint and the "
+            f"{task}/{variant} head weights did not load ({head_missing[:5]}...). The checkpoint and the "
             f"run_config architecture likely disagree. Refusing to run on an untrained head!"
         )
     return model
@@ -135,6 +141,7 @@ def build_model(run_config: dict, device: str = "cpu") -> torch.nn.Module:
         neff_s=run_config.get("neff_s", 20.0),
         task=run_config.get("task", "regression"),
         proj_dim=run_config.get("proj_dim", 128),
+        head_variant=run_config.get("head_variant", "twin"),
         num_labels=run_config.get("num_labels", 1),
     )
     return model.to(device)

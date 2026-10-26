@@ -1,7 +1,5 @@
 """
-entexbert2.build_inputs
-
-Use: dataset construction for 2-stage SFT pipeline built on a DNABERT-2 backbone
+entexbert2.build_inputs -- dataset construction for 2-stage SFT pipeline built on a DNABERT-2 backbone
 
 Driven by two classes:
 1. RowSource (sequence)
@@ -1341,7 +1339,7 @@ class HaplotypeCountRowSource(RowSource):
     """
     source_type = "hap_counts"
     has_variants = True
-    supported_input_modes = frozenset({"hap_pair"})
+    supported_input_modes = frozenset({"hap_pair", "ref_single"})
 
     def __init__(
         self,

@@ -60,6 +60,10 @@ class ModelArguments:
     neff_s: float = field(default=20.0, metadata={"help": "n_eff saturation cap s (0 = unweighted)"})
     # NEW: classification (contrast head) projection dimension d for delta = ||P(h1) - P(h2)|| ##############
     proj_dim: int = field(default=128, metadata={"help": "classification: shared projection dim d"})
+    # NEW: twin and regular (single sequence) classification head architecture options ######################
+    head_variant: str = field(default="auto", metadata={"help": "classification head: 'twin' "
+        "(contrast over hap1/hap2), 'single' (one window, ablation control), or 'auto' = derive "
+        "from --input_mode (hap_pair->twin, ref_single->single)"})
     # NEW: 2-stage transfer learning ########################################################################
     init_backbone_from: Optional[str] = field(default=None,
         metadata={"help": "path to a Stage-1 checkpoint; loads backbone.* weights only"})
@@ -143,6 +147,7 @@ class SupervisedDataset(Dataset):
             raise ValueError(f"{data_path} is empty.")
         cols = rows[0].keys()
 
+        # NEW: checking new entexBERT-2 model arguments were passed correctly
         if input_mode == "hap_pair":
             if "sequence1" not in cols or "sequence2" not in cols:
                 raise ValueError(f"hap_pair needs sequence1,sequence2 columns; got {list(cols)}.")
@@ -152,6 +157,17 @@ class SupervisedDataset(Dataset):
             seqcol = "sequence" if "sequence" in cols else "sequence1"
             logging.warning("ref_single: single window per example (task={input_mode and 'see --task'})...")
             texts = [r[seqcol] for r in rows]
+
+        if model_args.head_variant not in ("auto", "twin", "single"):
+            raise ValueError(f"--head_variant must be 'auto', 'twin' or 'single', got {model_args.head_variant!r}.")
+        if model_args.head_variant == "auto":
+            model_args.head_variant = "twin" if data_args.input_mode == "hap_pair" else "single"
+            logging.warning(f"--head_variant auto -> {model_args.head_variant!r} "
+                            f"(from --input_mode {data_args.input_mode})")
+        if model_args.head_variant == "twin" and data_args.input_mode != "hap_pair":
+            raise ValueError("--head_variant twin needs --input_mode hap_pair (it scores a window PAIR)")
+        if model_args.head_variant == "single" and data_args.input_mode != "ref_single":
+            raise ValueError("--head_variant single needs --input_mode ref_single (it scores a SINGLE window)")
 
         # NEW: multi-track Stage-1 binding
         y_track_cols = sorted([c for c in cols if c.startswith("y_track_")],
@@ -499,6 +515,7 @@ def train():
         task=data_args.task, # selects head topology
         num_labels=model_args.num_labels, # regression head width T (multi-track Stage-1)
         proj_dim=model_args.proj_dim, # classification projection dimension
+        head_variant=model_args.head_variant, # "twin" or "single" for classification
     )
 
     # NEW: 2-stage transfer ################################################################################
@@ -540,6 +557,7 @@ def train():
             "task": data_args.task,
             "num_labels": model_args.num_labels, # regression head width T (multi-track Stage-1)
             "proj_dim": model_args.proj_dim,
+            "head_variant": model_args.head_variant,
             "input_mode": data_args.input_mode,
             "use_lora": model_args.use_lora,
             "init_backbone_from": model_args.init_backbone_from,

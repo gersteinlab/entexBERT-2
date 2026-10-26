@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-entexbert2.model — the 2-stage ASB model
+entexbert2.model —- the 2-stage ASB model
 
   * task="regression"  (Stage-1 binding trunk):  mu = g(f(seq))
         One window -> one binding score,
@@ -106,6 +106,7 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
         task: str = "regression",
         num_labels: int = 1,
         proj_dim: int = 128, # classification projection dimension
+        head_variant: str = "twin", # classification: "twin" (contrast) or "single" (one window)
     ):
         super().__init__()
         if pooling_mode not in ("cls", "center_mean", "mean"):
@@ -119,6 +120,10 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
         num_labels = int(num_labels) # regression head width T (multi-track Stage-1 predicts one fold-change per tissue)
         if num_labels < 1:
             raise ValueError(f"num_labels must be >= 1, got {num_labels}.")
+        if task == "classification" and head_variant not in ("twin", "single"):
+            raise ValueError(
+                f"head_variant must be 'twin' or 'single' for classification, got {head_variant!r}."
+            )
         if task == "classification" and num_labels != 1:
             raise ValueError(
                 f"classification contrast head emits one P(ASB) logit; num_labels must be 1, "
@@ -129,6 +134,7 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
         self.neff_s = float(neff_s)
         self.task = task
         self.num_labels = num_labels
+        self.head_variant = head_variant if task == "classification" else "twin"
 
         # Shared pretrained trunk (DNABERT-2-117M)
         self.backbone = transformers.AutoModel.from_pretrained(
@@ -145,11 +151,21 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
                 input_size=head_input, output_size=self.num_labels, num_layers=head_num_layers,
                 hidden_size=head_hidden_size, activation=head_activation, dropout=head_dropout,
             )
-            # for classification only
+            # used for "twin" classification only
             self.proj = None
             self.dist_a = None
             self.dist_b = None
-        else: # classification
+
+        elif head_variant == "single": # classification, ONE window -> plain logit (ablation control)
+            self.main_head = build_prediction_head(
+                input_size=head_input, output_size=1, num_layers=head_num_layers,
+                hidden_size=head_hidden_size, activation=head_activation, dropout=head_dropout,
+            )
+            self.proj = None
+            self.dist_a = None
+            self.dist_b = None
+
+        else: # classification "twin"
             if proj_dim <= 0:
                 raise ValueError(f"proj_dim must be > 0 for classification, got {proj_dim}.")
             self.proj = build_prediction_head(
@@ -273,8 +289,18 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
         label_mask=None,           # (B,T) 0/1 observed-tissue mask for multi-track Stage-1 (no mask => all observed)
         **kwargs,
     ):
-        # classification: symmetric contrast (distance)
-        if self.task == "classification":
+        if self.task == "classification" and 
+            if self.head_variant == "single": # for single window class control
+                ell, _ = self._score_one(input_ids, attention_mask, **kwargs)
+                loss = None
+                if labels is not None:
+                    y = labels.float().view_as(ell)
+                    w = self._neff_weight(depth, ell)
+                    bce = torch.nn.functional.binary_cross_entropy_with_logits(ell, y, reduction="none")
+                    loss = (w * bce).mean()
+                return SequenceClassifierOutput(loss=loss, logits=ell.unsqueeze(-1))
+            
+            # otherwise: twin classification (symmetric contrast)
             if input_ids_alt is None:
                 raise RuntimeError(
                     "classification (contrast) head requires a paired (hap1, hap2) batch, but "
