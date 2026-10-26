@@ -158,17 +158,6 @@ class SupervisedDataset(Dataset):
             logging.warning("ref_single: single window per example (task={input_mode and 'see --task'})...")
             texts = [r[seqcol] for r in rows]
 
-        if model_args.head_variant not in ("auto", "twin", "single"):
-            raise ValueError(f"--head_variant must be 'auto', 'twin' or 'single', got {model_args.head_variant!r}.")
-        if model_args.head_variant == "auto":
-            model_args.head_variant = "twin" if data_args.input_mode == "hap_pair" else "single"
-            logging.warning(f"--head_variant auto -> {model_args.head_variant!r} "
-                            f"(from --input_mode {data_args.input_mode})")
-        if model_args.head_variant == "twin" and data_args.input_mode != "hap_pair":
-            raise ValueError("--head_variant twin needs --input_mode hap_pair (it scores a window PAIR)")
-        if model_args.head_variant == "single" and data_args.input_mode != "ref_single":
-            raise ValueError("--head_variant single needs --input_mode ref_single (it scores a SINGLE window)")
-
         # NEW: multi-track Stage-1 binding
         y_track_cols = sorted([c for c in cols if c.startswith("y_track_")],
                               key=lambda c: int(c.split("_")[-1]))
@@ -480,6 +469,18 @@ def train():
                                     data_path=os.path.join(data_args.data_path, "test.csv"), 
                                     input_mode=data_args.input_mode)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+
+    # NEW: resolve the classification head variant before datasets/model are built ############
+    if model_args.head_variant not in ("auto", "twin", "single"):
+        raise ValueError(f"--head_variant must be 'auto', 'twin' or 'single', got {model_args.head_variant!r}.")
+    if model_args.head_variant == "auto":
+        model_args.head_variant = "twin" if data_args.input_mode == "hap_pair" else "single"
+        logging.warning(f"--head_variant auto -> {model_args.head_variant!r} "
+                        f"(from --input_mode {data_args.input_mode})")
+    if model_args.head_variant == "twin" and data_args.input_mode != "hap_pair":
+        raise ValueError("--head_variant twin needs --input_mode hap_pair (it scores a window PAIR)")
+    if model_args.head_variant == "single" and data_args.input_mode != "ref_single":
+        raise ValueError("--head_variant single needs --input_mode ref_single (it scores a SINGLE window)")
 
     # NEW: reconcile head width with the dataset before building the model #################
     _ds_labels = train_dataset.num_labels

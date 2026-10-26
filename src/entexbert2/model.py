@@ -289,7 +289,7 @@ class entexBERT2ForSequencePrediction(torch.nn.Module):
         label_mask=None,           # (B,T) 0/1 observed-tissue mask for multi-track Stage-1 (no mask => all observed)
         **kwargs,
     ):
-        if self.task == "classification" and 
+        if self.task == "classification":
             if self.head_variant == "single": # for single window class control
                 ell, _ = self._score_one(input_ids, attention_mask, **kwargs)
                 loss = None
