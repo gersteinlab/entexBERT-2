@@ -458,18 +458,6 @@ def train():
     if "InstaDeepAI" in model_args.model_name_or_path:
         tokenizer.eos_token = tokenizer.pad_token
 
-    # define datasets and data collator [MODIFIED: added input_mode=data_args.input_mode for hap_pair]
-    train_dataset = SupervisedDataset(tokenizer=tokenizer,
-                                    data_path=os.path.join(data_args.data_path, "train.csv"),
-                                    input_mode=data_args.input_mode)
-    val_dataset = SupervisedDataset(tokenizer=tokenizer, 
-                                    data_path=os.path.join(data_args.data_path, "dev.csv"), 
-                                    input_mode=data_args.input_mode)
-    test_dataset = SupervisedDataset(tokenizer=tokenizer, 
-                                    data_path=os.path.join(data_args.data_path, "test.csv"), 
-                                    input_mode=data_args.input_mode)
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-
     # NEW: resolve the classification head variant before datasets/model are built ############
     if model_args.head_variant not in ("auto", "twin", "single"):
         raise ValueError(f"--head_variant must be 'auto', 'twin' or 'single', got {model_args.head_variant!r}.")
@@ -481,6 +469,18 @@ def train():
         raise ValueError("--head_variant twin needs --input_mode hap_pair (it scores a window PAIR)")
     if model_args.head_variant == "single" and data_args.input_mode != "ref_single":
         raise ValueError("--head_variant single needs --input_mode ref_single (it scores a SINGLE window)")
+
+    # define datasets and data collator [MODIFIED: added input_mode=data_args.input_mode for hap_pair]
+    train_dataset = SupervisedDataset(tokenizer=tokenizer,
+                                    data_path=os.path.join(data_args.data_path, "train.csv"),
+                                    input_mode=data_args.input_mode)
+    val_dataset = SupervisedDataset(tokenizer=tokenizer, 
+                                    data_path=os.path.join(data_args.data_path, "dev.csv"), 
+                                    input_mode=data_args.input_mode)
+    test_dataset = SupervisedDataset(tokenizer=tokenizer, 
+                                    data_path=os.path.join(data_args.data_path, "test.csv"), 
+                                    input_mode=data_args.input_mode)
+    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
     # NEW: reconcile head width with the dataset before building the model #################
     _ds_labels = train_dataset.num_labels

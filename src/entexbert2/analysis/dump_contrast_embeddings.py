@@ -58,6 +58,7 @@ def main():
                              f"AS/nonAS/1/0/true/false or a number")
 
     labels = np.array([_lab(r[args.label_col]) for r in rows], dtype=int)
+    idx = np.arange(len(rows)) # row indices the subsample selects from
     
     # optional subsample to bound GPU cost
     if args.neg_per_pos is not None or (args.max_rows and args.max_rows < len(rows)):

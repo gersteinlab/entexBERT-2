@@ -1363,11 +1363,19 @@ class HaplotypeCountRowSource(RowSource):
         # optional donor/assay filters
         for _attr, _col in (("donor", "donor"), ("assay", "assay")):
             _want = getattr(self, _attr)
-            if _want is not None and str(_want).upper() != "ALL" and _col not in df.columns:
+            if _want is None or str(_want).upper() == "ALL":
+                continue
+            if _col not in df.columns:
                 raise ValueError(
                     f"hap_counts source: {_attr}={_want!r} requested but {self.counts_csv} has no "
-                    f"{_col!r} column! "
-                    f"Have: {sorted(df.columns)}")
+                    f"{_col!r} column! Have: {sorted(df.columns)}")
+            if _col == "assay":   # case-insensitive substring (POLR2AphosphoS5 etc.)
+                df = df[df[_col].astype(str).str.contains(str(_want), case=False, na=False)]
+            else:                 # donor: exact match
+                df = df[df[_col].astype(str) == str(_want)]
+        if len(df) == 0:
+            raise ValueError(f"hap_counts source: no rows after donor/assay filter "
+                             f"(donor={self.donor!r}, assay={self.assay!r}).")
 
         df = df.reset_index(drop=True)
         df["ref_start"] = df["ref_start"].astype(int)
